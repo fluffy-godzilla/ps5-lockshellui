@@ -1,0 +1,25 @@
+FROM ubuntu:26.04
+
+# dependencies
+RUN apt-get update && apt-get install -y \
+    bsdextrautils \
+    bash \
+    clang \
+    lld \
+    wget \
+    unzip \
+    make
+
+# set up ps5-payload-sdk
+WORKDIR /opt
+RUN wget -q https://github.com/ps5-payload-dev/sdk/releases/latest/download/ps5-payload-sdk.zip
+RUN unzip -q ps5-payload-sdk.zip -d /opt
+
+# handle build dependencies
+WORKDIR /opt
+COPY build_deps.sh /opt/build_deps.sh
+RUN bash /opt/build_deps.sh
+
+# set the environment variables for subsequent builds
+ENV PS5_PAYLOAD_SDK=/opt/ps5-payload-sdk
+WORKDIR /src
