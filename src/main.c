@@ -10,7 +10,7 @@
 
 const char *elf_name = "ps5-shellui-lock.elf";
 
-#if defined(PS5_SDK)
+#if defined(PS5_PAYLOAD_SDK)
 const char *DB_PATH = "/system_data/priv/mms/app.db";
 #else
 const char *DB_PATH = "/tmp/app.db";
