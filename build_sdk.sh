@@ -24,7 +24,7 @@ fi
 
 # 2. Build native ELF via Docker
 echo "[2/3] Building native ELF via Docker..."
-docker run --rm -v "$(pwd)":/src -w /src $IMAGE_NAME make clean all > /dev/null 2>&1
+docker run --rm -v "$(pwd)":/src -w /src $IMAGE_NAME make -f Makefile.sdk   clean all > /dev/null 2>&1
 
 if [ $? -ne 0 ]; then
     echo "      !!! ELF build FAILED!"

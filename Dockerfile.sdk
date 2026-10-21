@@ -17,8 +17,8 @@ RUN unzip -q ps5-payload-sdk.zip -d /opt
 
 # handle build dependencies
 WORKDIR /opt
-COPY build_deps.sh /opt/build_deps.sh
-RUN bash /opt/build_deps.sh
+COPY build_sdk_deps.sh /opt/build_sdk_deps.sh
+RUN bash /opt/build_sdk_deps.sh
 
 # set the environment variables for subsequent builds
 ENV PS5_PAYLOAD_SDK=/opt/ps5-payload-sdk

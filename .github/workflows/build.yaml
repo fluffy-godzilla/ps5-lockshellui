@@ -17,8 +17,8 @@ jobs:
         uses: actions/checkout@v7
       - name: Build the ELF
         run: |
-          chmod +x build.sh
-          ./build.sh "$PS5_SHELLUI_LOCK_VERSION"
+          chmod +x build_sdk.sh
+          ./build_sdk.sh "$PS5_SHELLUI_LOCK_VERSION"
       - name: Upload artifact
         uses: actions/upload-artifact@v6
         with:
