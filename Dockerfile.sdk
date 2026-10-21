@@ -4,8 +4,9 @@ FROM ubuntu:26.04
 RUN apt-get update && apt-get install -y \
     bsdextrautils \
     bash \
-    clang \
-    lld \
+    clang-18 \
+    lld-18 \
+    llvm-18-dev \
     wget \
     unzip \
     make

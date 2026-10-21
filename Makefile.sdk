@@ -1,20 +1,21 @@
 # ps5-shellui-lock - Native PS5 ELF Daemon Makefile
 
-# Tools
-PYTHON := python3
-HOST_CC ?= clang
-CC     := /opt/ps5-payload-sdk/bin/prospero-clang
-STRIP  := /opt/ps5-payload-sdk/bin/prospero-strip
+ifdef PS5_PAYLOAD_SDK
+    include $(PS5_PAYLOAD_SDK)/toolchain/prospero.mk
+else
+    $(error PS5_PAYLOAD_SDK is undefined)
+endif
 
 # Paths
-SDK      := /opt/ps5-payload-sdk
-TARGET   := $(SDK)/target
+TARGET   := $(PS5_PAYLOAD_SDK)/target
 INCLUDES := -Iinclude -I$(TARGET)/include
 LIBS     := -L$(TARGET)/lib -lpthread \
             -lSceUserService -lSceSystemService
 
 # Source Files
-SRCS := src/main.c $(TARGET)/src/sqlite3.c
+SRCS := src/main.c \
+				src/util_ps5.c \
+			  $(TARGET)/src/sqlite3.c
 OBJS := $(SRCS:.c=.o)
 ELF  := ps5-shellui-lock.elf
 
