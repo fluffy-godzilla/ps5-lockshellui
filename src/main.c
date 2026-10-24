@@ -17,6 +17,10 @@ static AppConfig config;
 static int num_uids = 0;
 static UserID uids[MAX_NUM_USER_PROFILES];
 
+#define TIMER_PERIODIC_TICK 10
+#define TIMER_CONFIG_DEBOUNCE 20
+#define TIMER_APPDB_DEBOUNCE 30
+
 // rethrow the SIGTERM signal for kqueue to catch it
 static void on_signal(int signo) {
   log_printf("on_signal: %d", signo);
@@ -56,9 +60,25 @@ static void init_config() {
 
   config.general.oneshot = 0;
   config.general.debug = 0;
-  config.general.quiet = 0;
+  config.general.quiet = 1;
 
   save_config(CONFIG_PATH, &config);
+}
+
+static int file_changed(const char *file_path, struct timespec *mtime, off_t *size) {
+  struct stat now;
+
+  if (stat(file_path, &now) == 0) {
+    if (mtime->tv_sec == 0 && *size == 0) {
+      *mtime = now.st_mtim;
+      *size = now.st_size;
+    } else if (mtime->tv_sec != now.st_mtim.tv_sec || *size != now.st_size) {
+      *mtime = now.st_mtim;
+      *size = now.st_size;
+      return 1;
+    }
+  }
+  return 0;
 }
 
 static int validate_and_apply_override(void) {
@@ -67,7 +87,7 @@ static int validate_and_apply_override(void) {
     return 0;
   }
 
-  log_printf("Database is inconsistent with our configuration. Applying override...");
+  notify("Database is inconsistent with our configuration. Applying override...");
   return apply_config_to_db(&config, num_uids, uids);
 }
 
@@ -77,17 +97,24 @@ static int handle_sigterm(int kq, EventContext *ctx, struct kevent *e, struct ke
 }
 
 static int handle_config_update(int kq, EventContext *ctx, struct kevent *e, struct kevent *chlist, int *nchanges) {
+  static struct timespec config_mtime = {};
+  static off_t config_size = 0;
+
   if (e->filter == EVFILT_VNODE) {
+    if (!file_changed(CONFIG_PATH, &config_mtime, &config_size)) {
+      return 0;
+    }
+
     log_printf("config file changed, letting fs settle...");
     extern EventContext config_ctx;
 
     // debounce the actual change to let the file writes settle
-    EV_SET(&chlist[(*nchanges)++], 20, EVFILT_TIMER, EV_ADD | EV_ENABLE | EV_ONESHOT, 0, TIMER_COOLDOWN_MS,
-           &config_ctx);
+    EV_SET(&chlist[(*nchanges)++], TIMER_CONFIG_DEBOUNCE, EVFILT_TIMER, EV_ADD | EV_ENABLE | EV_ONESHOT, 0,
+           TIMER_COOLDOWN_MS, &config_ctx);
     return 0;
   }
 
-  log_printf("config file changed, reloading...");
+  notify("Configuration file changed, reloading config...");
   if (load_config(CONFIG_PATH, &config) != 0) {
     free_config(&config);
     return -1;
@@ -96,7 +123,7 @@ static int handle_config_update(int kq, EventContext *ctx, struct kevent *e, str
   log_enable(config.general.debug);
   notify_enable(!config.general.quiet);
 
-  // apply the changes to db (whether they really changed or not)
+  notify("Applying override due to configuration file change...");
   apply_config_to_db(&config, num_uids, uids);
 
   // kill thyself
@@ -108,65 +135,41 @@ static int handle_config_update(int kq, EventContext *ctx, struct kevent *e, str
 }
 
 static int handle_appdb_update(int kq, EventContext *ctx, struct kevent *e, struct kevent *chlist, int *nchanges) {
+  static struct timespec appdb_mtime = {};
+  static off_t appdb_size = 0;
+
   if (e->filter == EVFILT_VNODE) {
+    if (!file_changed(DB_PATH, &appdb_mtime, &appdb_size)) {
+      return 0;
+    }
+
     log_printf("%s changed, letting fs settle...", DB_PATH);
     extern EventContext appdb_ctx;
 
     // debounce the actual change to let the file writes settle
-    EV_SET(&chlist[(*nchanges)++], 30, EVFILT_TIMER, EV_ADD | EV_ENABLE | EV_ONESHOT, 0, TIMER_COOLDOWN_MS, &appdb_ctx);
+    EV_SET(&chlist[(*nchanges)++], TIMER_APPDB_DEBOUNCE, EVFILT_TIMER, EV_ADD | EV_ENABLE | EV_ONESHOT, 0,
+           TIMER_COOLDOWN_MS, &appdb_ctx);
     return 0;
   }
 
   log_printf("%s changed, validating...", DB_PATH);
-  int rc = validate_and_apply_override();
-
-  // TODO: maybe add debounce here as well so we don't react to our own apply_override
-
-  return rc;
+  return validate_and_apply_override();
 }
 
 // this exists due to EVFILT_VNODE quirks in libkqueue implementation in linux.
-// handle_file_timer_tick tracks the modtime/size changes in db and config files and triggers the appropriate handler.
+// handle_config_update and handle_file_mod internally track the modtime/size changes in db and config files and
+// only act whenever the changes do occur.
 static int handle_file_timer_tick(int kq, EventContext *ctx, struct kevent *e, struct kevent *chlist, int *nchanges) {
-  static struct timespec appdb_mtime = {}, config_mtime = {};
-  static off_t appdb_size = 0, config_size = 0;
-  struct stat now;
-
-  // pretend to be a fs change event for the same of handlers' logic
+  // pretend to be a fs change event for the sake of handlers' logic
   e->filter = EVFILT_VNODE;
 
-  if (stat(DB_PATH, &now) == 0) {
-    if (appdb_mtime.tv_sec == 0 && appdb_size == 0) {
-      appdb_mtime = now.st_mtim;
-      appdb_size = now.st_size;
-    } else if (appdb_mtime.tv_sec != now.st_mtim.tv_sec || appdb_size != now.st_size) {
-      appdb_mtime = now.st_mtim;
-      appdb_size = now.st_size;
-
-      int first_rc = handle_appdb_update(kq, ctx, e, chlist, nchanges);
-      if (first_rc) {
-        return first_rc;
-      }
-    }
-  }
-
-  if (stat(CONFIG_PATH, &now) == 0) {
-    if (config_mtime.tv_sec == 0 && config_size == 0) {
-      config_mtime = now.st_mtim;
-      config_size = now.st_size;
-    } else if (config_mtime.tv_sec != now.st_mtim.tv_sec || config_size != now.st_size) {
-      config_mtime = now.st_mtim;
-      config_size = now.st_size;
-
-      return handle_config_update(kq, ctx, e, chlist, nchanges);
-    }
-  }
-
-  return 0;
+  int rc1 = handle_config_update(kq, ctx, e, chlist, nchanges);
+  int rc2 = handle_appdb_update(kq, ctx, e, chlist, nchanges);
+  return rc1 ? rc1 : rc2;
 }
 
 EventContext sigterm_ctx = {.id = SIGTERM, .filter = EVFILT_SIGNAL, .handle_event = handle_sigterm};
-EventContext timer_ctx = {.id = 10, .filter = EVFILT_TIMER, .handle_event = handle_file_timer_tick};
+EventContext timer_ctx = {.id = TIMER_PERIODIC_TICK, .filter = EVFILT_TIMER, .handle_event = handle_file_timer_tick};
 EventContext config_ctx = {.id = 0, .handle_event = handle_config_update};
 EventContext appdb_ctx = {.id = 0, .handle_event = handle_appdb_update};
 
@@ -190,22 +193,22 @@ static int monitor_events(void) {
   EV_SET(&change_list[nchanges++], SIGTERM, EVFILT_SIGNAL, EV_ADD | EV_ENABLE, 0, 0, &sigterm_ctx);
 
 #if defined(PS5_PAYLOAD_SDK)
-  appdb_fd = open(DB_PATH, O_RDONLY);
+  appdb_fd = open(DB_DIR, O_RDONLY);
   if (appdb_fd == -1) {
-    log_printf("Error opening database file descriptor");
+    log_printf("Error opening database dir file descriptor");
     goto cleanup;
   }
 
-  config_fd = open(CONFIG_PATH, O_RDONLY);
+  config_fd = open(CONFIG_DIR, O_RDONLY);
   if (config_fd == -1) {
-    log_printf("Error opening config file descriptor");
+    log_printf("Error opening config dir file descriptor");
     goto cleanup;
   }
 
   appdb_ctx.id = appdb_fd;
   config_ctx.id = config_fd;
 
-  // file-level edge-triggers
+  // file-dir-level edge-triggers
   EV_SET(&change_list[nchanges++], appdb_fd, EVFILT_VNODE, EV_ADD | EV_ENABLE | EV_CLEAR, NOTE_WRITE, 0, &appdb_ctx);
   EV_SET(&change_list[nchanges++], config_fd, EVFILT_VNODE, EV_ADD | EV_ENABLE | EV_CLEAR, NOTE_WRITE, 0, &config_ctx);
 #else
