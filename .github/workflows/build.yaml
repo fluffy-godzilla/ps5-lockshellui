@@ -1,10 +1,6 @@
 # for now this is done every time we push
 name: Build and publish the ps5-shellui-lock payload
 
-# TODO: in the future use the release version from the tag instead of hardcoding it here
-env:
-  PS5_SHELLUI_LOCK_VERSION: 1.0.2
-
 on:
   push:
   workflow_dispatch:
@@ -18,9 +14,33 @@ jobs:
       - name: Build the ELF
         run: |
           chmod +x build_sdk.sh
-          ./build_sdk.sh "$PS5_SHELLUI_LOCK_VERSION"
+          ./build_sdk.sh
       - name: Upload artifact
         uses: actions/upload-artifact@v6
         with:
-          name: lockshellui_v${{ env.PS5_SHELLUI_LOCK_VERSION }}
-          path: lockshellui_v${{ env.PS5_SHELLUI_LOCK_VERSION }}.elf
+          name: payload
+          path: lockshellui.elf
+          if-no-files-found: error
+
+  release:
+    needs: build
+    permissions:
+      contents: write
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: payload
+          path: tmp-download/
+      - name: Rename artifact
+        run: |
+          mkdir dist
+          cp tmp-download/lockshellui.elf "dist/lockshellui_${{ github.ref_name }}.elf"
+      - name: Create GitHub Release (pre-release)
+        uses: softprops/action-gh-release@v3
+        with:
+          name: "Release ${{ github.ref_name }}"
+          generate_release_notes: true # Optional: Auto-generates release notes
+          files: "dist/lockshellui_${{ github.ref_name }}.elf"

@@ -9,11 +9,13 @@
 
 #if defined(PS5_PAYLOAD_SDK)
 #define DB_PATH "/system_data/priv/mms/app.db"
-#define CONFIG_PATH "/data/lockshellui/config.ini"
+#define CONFIG_DIR "/data/lockshellui"
+#define CONFIG_PATH CONFIG_DIR"/config.ini"
 #define ELF_NAME "lockshellui.elf"
 #else
 #define DB_PATH "/tmp/app.db"
-#define CONFIG_PATH "/tmp/lockshellui.ini"
+#define CONFIG_DIR "/tmp"
+#define CONFIG_PATH CONFIG_DIR"/lockshellui.ini"
 #define ELF_NAME "lockshellui"
 #endif
 

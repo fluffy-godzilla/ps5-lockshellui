@@ -1,14 +1,11 @@
 #!/bin/bash
-# main build script, expects to be run from the root of the repository and to be provided the version number 
-# as an argument (e.g. ./build.sh 1.2.3)
-VERSION=${1:-"1.0.0"}  # Default version if not set in environment
+# main build script, expects to be run from the root of the repository
 
 ELFNAME="lockshellui"
-INPUT_ELF="${ELFNAME}.elf"
-OUTPUT_ELF="${ELFNAME}_v${VERSION}.elf"
+ELF="${ELFNAME}.elf"
 IMAGE_NAME="ps5-payload-sdk-${ELFNAME}"
 
-echo "--- Building $OUTPUT_ELF ---"
+echo "--- Building $ELF ---"
 
 # 1. Build/verify the docker image
 echo "[1/3] Building Docker Image..."
@@ -31,13 +28,3 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 echo "      ELF build successful."
-
-# 3. Rename output
-if [ -f "$INPUT_ELF" ]; then
-    mv "$INPUT_ELF" "$OUTPUT_ELF"
-    echo "[3/3] Created versioned binary: $OUTPUT_ELF"
-    echo "--- Build Complete! ---"
-else
-    echo "      !!! $INPUT_ELF not found after build!"
-    exit 1
-fi

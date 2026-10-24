@@ -1,2 +1,4 @@
-# ps5-shellui-lock
-Locks the PS5 ShellUI icons to their predefined configuration
+# ps5-lockshellui
+Locks and orders the PS5 ShellUI icons according to configuration in `/data/lockshellui/lockshellui.ini`
+
+See [Example](./lockshellui.ini.example)

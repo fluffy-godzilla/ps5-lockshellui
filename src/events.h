@@ -1,6 +1,8 @@
 #ifndef __EVENTS_H_
 #define __EVENTS_H_
 
+#include <stdint.h>
+#include <sys/types.h>
 #include <sys/event.h>
 
 struct EventContext;

@@ -24,6 +24,15 @@ static void on_signal(int signo) {
 }
 
 static void init_config() {
+  struct stat st;
+
+  // no logs just yet
+  if (stat(CONFIG_DIR, &st) != 0) {
+    if (mkdir(CONFIG_DIR, 0777) != 0) {
+      return;
+    }
+  }
+
   if (load_config(CONFIG_PATH, &config) == 0) {
     return;
   }
@@ -46,8 +55,8 @@ static void init_config() {
   sort_app_list(&config.sort);
 
   config.general.oneshot = 0;
-  config.general.debug = 1;
-  config.general.quiet = 1;
+  config.general.debug = 0;
+  config.general.quiet = 0;
 
   save_config(CONFIG_PATH, &config);
 }
