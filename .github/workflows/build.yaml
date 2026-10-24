@@ -3,7 +3,7 @@ name: Build and publish the ps5-shellui-lock payload
 
 # TODO: in the future use the release version from the tag instead of hardcoding it here
 env:
-  PS5_SHELLUI_LOCK_VERSION: 1.0.1
+  PS5_SHELLUI_LOCK_VERSION: 1.0.2
 
 on:
   push:
@@ -22,5 +22,5 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v6
         with:
-          name: ps5-shellui-lock_v${{ env.PS5_SHELLUI_LOCK_VERSION }}
-          path: ps5-shellui-lock_v${{ env.PS5_SHELLUI_LOCK_VERSION }}.elf
+          name: lockshellui_v${{ env.PS5_SHELLUI_LOCK_VERSION }}
+          path: lockshellui_v${{ env.PS5_SHELLUI_LOCK_VERSION }}.elf

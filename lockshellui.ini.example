@@ -1,0 +1,41 @@
+# Lock ShellUI configuration
+
+[general]
+debug=0
+# set to 1 to probe, apply and exit
+oneshot=0
+# set to 1 to disable popup notifications
+quiet=0
+
+# Icon visibility, same for each user
+[visibility]
+# Playstation Plus
+NPXS40037=0
+# Playstation Store
+NPXS40047=0
+# All Apps
+NPXS40056=0
+# Media Gallery
+NPXS40075=0
+# Welcome
+NPXS40063=1
+# Game Library
+NPXS40071=1
+# App Library
+NPXS40139=1
+
+# This allows to 'pin' app icons to their specific spot in the corresponding
+# tab. The smaller the number, the more to the left it is on screen in the tab.
+# The second icon in the tab is usually the default one when you switch to that
+# tab, so Welcome for games, and Y2JB for Media, in this example.
+# All icons that aren't specified here will use their builtin sort values and
+# will be sorted by PS5 ShellUI based on their last access time.
+[sort]
+# Game Library is the first fixed icon in the Games tab
+NPXS40071=10
+# Welcome is the second fixed icon in the Games tab
+NPXS40063=12
+# App Library is the first fixed icon in the Media tab
+NPXS40139=13
+# Youtube/Y2JB is the second fixed icon in the Media tab
+PPSA01650=15

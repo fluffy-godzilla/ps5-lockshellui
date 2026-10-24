@@ -57,4 +57,5 @@ dkms.conf
 # pc-related ext stuff
 ext/
 ps5-shellui-lock
+lockshellui
 test

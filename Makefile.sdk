@@ -6,6 +6,9 @@ else
     $(error PS5_PAYLOAD_SDK is undefined)
 endif
 
+PS5_HOST ?= ps5
+PS5_PORT ?= 9021
+
 # Paths
 TARGET   := $(PS5_PAYLOAD_SDK)/target
 INCLUDES := -Iinclude -I$(TARGET)/include
@@ -14,13 +17,15 @@ LIBS     := -L$(TARGET)/lib -lpthread \
 
 # Source Files
 SRCS := src/main.c \
-				src/util_ps5.c \
+				src/appdb.c \
+				src/config.c \
+				src/ps5_util.c \
 			  $(TARGET)/src/sqlite3.c
 OBJS := $(SRCS:.c=.o)
-ELF  := ps5-shellui-lock.elf
+ELF  := lockshellui.elf
 
 # Compiler Flags
-CFLAGS := -Os -Wall -ffunction-sections -fdata-sections $(INCLUDES)
+CFLAGS := -Os -Wall -DPS5_PAYLOAD_SDK -ffunction-sections -fdata-sections $(INCLUDES)
 LDFLAGS := -Wl,--gc-sections
 
 all: $(ELF)
@@ -30,6 +35,9 @@ $(ELF): $(SRCS)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $(ELF) $(SRCS) $(LIBS)
 	@echo "Stripping $(ELF)..."
 	$(STRIP) $(ELF)
+
+test: $(ELF)
+	$(PS5_DEPLOY) -h $(PS5_HOST) -p $(PS5_PORT) $^
 
 clean:
 	rm -f $(ELF) src/*.o $(TARGET)/src/*.o

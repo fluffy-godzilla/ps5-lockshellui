@@ -1,253 +1,308 @@
-#include <stdio.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <sys/types.h>
-#include <sys/event.h>
-#include <sqlite3.h>
+#include "appdb.h"
+#include "common.h"
+#include "config.h"
+#include "events.h"
 #include "util.h"
+#include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/event.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
 
-#define OS_WRITE_COOLDOWN_US 500000
+static AppConfig config;
+static int num_uids = 0;
+static UserID uids[MAX_NUM_USER_PROFILES];
 
-const char *elf_name = "ps5-shellui-lock.elf";
-
-#if defined(PS5_PAYLOAD_SDK)
-const char *DB_PATH = "/system_data/priv/mms/app.db";
-#else
-const char *DB_PATH = "/tmp/app.db";
-#endif
-
-static volatile int ignore_next_write = 0;
-
-// Callback for our validation pre-check query
-static int check_callback(void *data, int argc, char **argv, char **azColName)
-{
-  int *needs_override = (int *)data;
-  // If our validation query returns ANY rows, it means something is wrong
-  // (e.g., we query for rows where visible != 1 or sortOrder != expected)
-  if (argc > 0)
-  {
-    *needs_override = 1;
-  }
-  return 0;
+// rethrow the SIGTERM signal for kqueue to catch it
+static void on_signal(int signo) {
+  log_printf("on_signal: %d", signo);
+  raise(SIGTERM);
 }
 
-// Checks if the database is already matching our rules, and if not, applies the override script
-int validate_and_enforce_override(const char *db_path)
-{
-  sqlite3 *db;
-  char *err_msg = 0;
-  int needs_override = 0;
-
-  // 1. PRE-CHECK PHASE (Read-Only)
-  // Open as Read-Only first to avoid fighting the OS for an exclusive write lock if we don't need to.
-  int rc = sqlite3_open_v2(db_path, &db, SQLITE_OPEN_READONLY, NULL);
-  if (rc == SQLITE_OK)
-  {
-    sqlite3_busy_timeout(db, 2000);
-
-    // If this query returns rows, it means the OS reverted our changes.
-    // TODO: find at least one user in the app.db and use that table
-    const char *validation_query = "SELECT 1 FROM tbl_iconinfo_0350443091 WHERE titleId == 'NPXS40047' AND visible == 1 LIMIT 1;";
-
-    rc = sqlite3_exec(db, validation_query, check_callback, &needs_override, &err_msg);
-    if (rc != SQLITE_OK)
-    {
-      // If the schema changed or table doesn't exist yet, default to attempting the override
-      needs_override = 1;
-      sqlite3_free(err_msg);
-    }
-    sqlite3_close(db);
-  }
-  else
-  {
-    // If we can't even open read-only, assume we should try the write override
-    needs_override = 1;
+static void init_config() {
+  if (load_config(CONFIG_PATH, &config) == 0) {
+    return;
   }
 
-  // Fallback optimization: If the presence values are already correct, bail out safely!
-  if (!needs_override)
-  {
-    notify("[Optimization] Presence fields are already correct. Skipping write and UI reload.\n");
+  log_printf("Failed to load configuration. Setting defaults...");
+  memset(&config, 0, sizeof(AppConfig));
+
+  insert_or_update_app(&config.visibility, "NPXS40037", 0);
+  insert_or_update_app(&config.visibility, "NPXS40047", 0);
+  insert_or_update_app(&config.visibility, "NPXS40056", 0);
+  insert_or_update_app(&config.visibility, "NPXS40075", 0);
+  insert_or_update_app(&config.visibility, "NPXS40063", 1);
+  insert_or_update_app(&config.visibility, "NPXS40071", 1);
+  insert_or_update_app(&config.visibility, "NPXS40139", 1);
+
+  insert_or_update_app(&config.sort, "NPXS40071", 10);
+  insert_or_update_app(&config.sort, "NPXS40063", 12);
+  insert_or_update_app(&config.sort, "NPXS40139", 13);
+  insert_or_update_app(&config.sort, "PPSA01650", 15);
+  sort_app_list(&config.sort);
+
+  config.general.oneshot = 0;
+  config.general.debug = 1;
+  config.general.quiet = 1;
+
+  save_config(CONFIG_PATH, &config);
+}
+
+static int validate_and_apply_override(void) {
+  if (!db_config_mismatch(&config, num_uids, uids)) {
+    log_printf("Database is consistent with our configuration");
     return 0;
   }
 
-  // 2. OVERRIDE PHASE (Read-Write)
-  notify("[State Drift] Presence modification detected. Opening read-write channel...\n");
-  rc = sqlite3_open_v2(db_path, &db, SQLITE_OPEN_READWRITE, NULL);
-  if (rc != SQLITE_OK)
-  {
-    notify("[Error] Cannot open database for writing: %s\n", sqlite3_errmsg(db));
-    sqlite3_close(db);
-    return -1;
-  }
-
-  sqlite3_busy_timeout(db, 5000);
-
-  rc = sqlite3_exec(db, "BEGIN IMMEDIATE;", 0, 0, &err_msg);
-  if (rc != SQLITE_OK)
-  {
-    notify("[Lock Failed] Could not lock DB: %s\n", err_msg);
-    sqlite3_free(err_msg);
-    sqlite3_close(db);
-    return -1;
-  }
-
-  const char *sql =
-      "UPDATE tbl_iconinfo_0350443091 SET visible = 0 "
-      "WHERE titleId IN ('NPXS40037', 'NPXS40047', 'NPXS40056', 'NPXS40075');"
-      "UPDATE tbl_iconinfo_0350443091 SET visible = 1 "
-      "WHERE titleId IN ('NPXS40063', 'NPXS40071');"
-      "UPDATE tbl_iconinfo_0350443091 SET visible = 1 "
-      "WHERE titleId IN ('NPXS40139');"
-      "UPDATE tbl_contentInfo SET sortPriority = 10 "
-      "WHERE titleId == 'NPXS40071';"
-      "UPDATE tbl_contentInfo SET sortPriority = 12 "
-      "WHERE titleId == 'NPXS40063';"
-      "UPDATE tbl_contentInfo SET sortPriority = 13 "
-      "WHERE titleId == 'NPXS40139';"
-      "UPDATE tbl_contentInfo SET sortPriority = 15 "
-      "WHERE titleId == 'PPSA01650';";
-
-  // Block our kqueue loop from responding to our upcoming write action
-  ignore_next_write = 1;
-
-  rc = sqlite3_exec(db, sql, 0, 0, &err_msg);
-  if (rc != SQLITE_OK)
-  {
-    notify("[SQL Error] Override failed: %s\n", err_msg);
-    sqlite3_free(err_msg);
-    sqlite3_exec(db, "ROLLBACK;", 0, 0, NULL);
-    ignore_next_write = 0;
-    // free(sql);
-    sqlite3_close(db);
-    return -1;
-  }
-
-  rc = sqlite3_exec(db, "COMMIT;", 0, 0, &err_msg);
-  if (rc != SQLITE_OK)
-  {
-    notify("[Commit Failed] Save failed: %s\n", err_msg);
-    sqlite3_free(err_msg);
-    ignore_next_write = 0;
-    sqlite3_close(db);
-    // free(sql);
-    return -1;
-  }
-
-  notify("[Success] Custom presence fields successfully restored.\n");
-  // free(sql);
-  sqlite3_close(db);
-
-  // 3. UI RELOAD PHASE
-  // Triggered strictly when changes were physically written out to disk
-  notify("[UI Sync] Executing system call to reload PS5 shell interface...\n");
-  shellui_reload();
-  return 0;
+  log_printf("Database is inconsistent with our configuration. Applying override...");
+  return apply_config_to_db(&config, num_uids, uids);
 }
 
-int main_loop() {
-
-  int file_fd = open(DB_PATH, O_RDONLY);
-  if (file_fd == -1)
-  {
-    notify("Error opening database file descriptor");
-    return 1;
-  }
-
-  int kq = kqueue();
-  if (kq == -1)
-  {
-    notify("Error creating kqueue");
-    close(file_fd);
-    return 2;
-  }
-
-  struct kevent change_event;
-  struct kevent trigger_event;
-
-  EV_SET(&change_event, file_fd, EVFILT_VNODE, EV_ADD | EV_ENABLE | EV_CLEAR, NOTE_WRITE | NOTE_DELETE | NOTE_RENAME, 0, NULL);
-
-  if (kevent(kq, &change_event, 1, NULL, 0, NULL) == -1)
-  {
-    notify("Error registering kqueue event");
-    close(file_fd);
-    close(kq);
-    return 3;
-  }
-
-  printf("[Listening] Actively monitoring for PS5 updates to %s...\n", DB_PATH);
-
-  while (1)
-  {
-    int new_events = kevent(kq, NULL, 0, &trigger_event, 1, NULL);
-    if (new_events == -1)
-    {
-      notify("kevent exception encountered");
-      break;
-    }
-    else if (new_events > 0)
-    {
-      if (trigger_event.fflags & NOTE_WRITE)
-      {
-
-        if (ignore_next_write)
-        {
-          notify("[Self Loop Blocked] Safely ignoring our own write event.\n");
-          ignore_next_write = 0;
-          continue;
-        }
-
-        notify("\n[OS Trigger] System software modified app.db.\n");
-        notify("[Cooldown] Pausing for %dms...\n", OS_WRITE_COOLDOWN_US / 1000);
-        usleep(OS_WRITE_COOLDOWN_US);
-
-        // Evaluate if the system software broke our fields, override if necessary, and reload UI
-        validate_and_enforce_override(DB_PATH);
-      }
-      else if (trigger_event.fflags & NOTE_DELETE || trigger_event.fflags & NOTE_RENAME)
-      {
-        notify("File was replaced or deleted! Need to re-open file_fd and re-register kqueue.\n");
-        close(file_fd);
-        close(kq);
-
-        // Sleep a tiny bit to let the writing application finish the rename
-        usleep(100000);
-
-        // we will try again
-        return 0;
-      }
-      else
-      {
-        notify("!!!!");
-      }
-    }
-    else
-    {
-      notify("????");
-    }
-  }
-
-  close(file_fd);
-  close(kq);
+static int handle_sigterm(int kq, EventContext *ctx, struct kevent *e, struct kevent *chlist, int *nchanges) {
+  log_printf("Caught SIGTERM. Cleaning up and exiting...");
   return -1;
 }
 
-int main(int argc, char *argv[])
-{
-  rename_service_thread(elf_name);
+static int handle_config_update(int kq, EventContext *ctx, struct kevent *e, struct kevent *chlist, int *nchanges) {
+  if (e->filter == EVFILT_VNODE) {
+    log_printf("config file changed, letting fs settle...");
+    extern EventContext config_ctx;
 
-  notify("[LOCK] starting %s...\n", elf_name);
+    // debounce the actual change to let the file writes settle
+    EV_SET(&chlist[(*nchanges)++], 20, EVFILT_TIMER, EV_ADD | EV_ENABLE | EV_ONESHOT, 0, TIMER_COOLDOWN_MS,
+           &config_ctx);
+    return 0;
+  }
 
-  // Enforce initial configuration states on bootup
-  validate_and_enforce_override(DB_PATH);
+  log_printf("config file changed, reloading...");
+  if (load_config(CONFIG_PATH, &config) != 0) {
+    free_config(&config);
+    return -1;
+  }
 
-  while(1) {
-    if (main_loop()) {
-      break;
+  log_enable(config.general.debug);
+  notify_enable(!config.general.quiet);
+
+  // apply the changes to db (whether they really changed or not)
+  apply_config_to_db(&config, num_uids, uids);
+
+  // kill thyself
+  if (config.general.oneshot) {
+    log_printf("mode changed to oneshot, exiting...");
+    raise(SIGTERM);
+  }
+  return 0;
+}
+
+static int handle_appdb_update(int kq, EventContext *ctx, struct kevent *e, struct kevent *chlist, int *nchanges) {
+  if (e->filter == EVFILT_VNODE) {
+    log_printf("%s changed, letting fs settle...", DB_PATH);
+    extern EventContext appdb_ctx;
+
+    // debounce the actual change to let the file writes settle
+    EV_SET(&chlist[(*nchanges)++], 30, EVFILT_TIMER, EV_ADD | EV_ENABLE | EV_ONESHOT, 0, TIMER_COOLDOWN_MS, &appdb_ctx);
+    return 0;
+  }
+
+  log_printf("%s changed, validating...", DB_PATH);
+  int rc = validate_and_apply_override();
+
+  // TODO: maybe add debounce here as well so we don't react to our own apply_override
+
+  return rc;
+}
+
+// this exists due to EVFILT_VNODE quirks in libkqueue implementation in linux.
+// handle_file_timer_tick tracks the modtime/size changes in db and config files and triggers the appropriate handler.
+static int handle_file_timer_tick(int kq, EventContext *ctx, struct kevent *e, struct kevent *chlist, int *nchanges) {
+  static struct timespec appdb_mtime = {}, config_mtime = {};
+  static off_t appdb_size = 0, config_size = 0;
+  struct stat now;
+
+  // pretend to be a fs change event for the same of handlers' logic
+  e->filter = EVFILT_VNODE;
+
+  if (stat(DB_PATH, &now) == 0) {
+    if (appdb_mtime.tv_sec == 0 && appdb_size == 0) {
+      appdb_mtime = now.st_mtim;
+      appdb_size = now.st_size;
+    } else if (appdb_mtime.tv_sec != now.st_mtim.tv_sec || appdb_size != now.st_size) {
+      appdb_mtime = now.st_mtim;
+      appdb_size = now.st_size;
+
+      int first_rc = handle_appdb_update(kq, ctx, e, chlist, nchanges);
+      if (first_rc) {
+        return first_rc;
+      }
     }
   }
 
-  notify("[LOCK] stopping %s...\n", elf_name);
-  sleep(1);
+  if (stat(CONFIG_PATH, &now) == 0) {
+    if (config_mtime.tv_sec == 0 && config_size == 0) {
+      config_mtime = now.st_mtim;
+      config_size = now.st_size;
+    } else if (config_mtime.tv_sec != now.st_mtim.tv_sec || config_size != now.st_size) {
+      config_mtime = now.st_mtim;
+      config_size = now.st_size;
+
+      return handle_config_update(kq, ctx, e, chlist, nchanges);
+    }
+  }
+
   return 0;
+}
+
+EventContext sigterm_ctx = {.id = SIGTERM, .filter = EVFILT_SIGNAL, .handle_event = handle_sigterm};
+EventContext timer_ctx = {.id = 10, .filter = EVFILT_TIMER, .handle_event = handle_file_timer_tick};
+EventContext config_ctx = {.id = 0, .handle_event = handle_config_update};
+EventContext appdb_ctx = {.id = 0, .handle_event = handle_appdb_update};
+
+// returns 0 upon success (when terminating), anything else as error
+static int monitor_events(void) {
+  int config_fd = -1;
+  int appdb_fd = -1;
+  int rc = 1;
+
+  int kq = kqueue();
+  if (kq == -1) {
+    log_printf("kqueue failed");
+    return rc;
+  }
+
+  // configure the event loop
+  int nchanges = 0;
+  struct kevent change_list[MAX_KQUEUE_EVENTS];
+  struct kevent event_list[MAX_KQUEUE_EVENTS];
+
+  EV_SET(&change_list[nchanges++], SIGTERM, EVFILT_SIGNAL, EV_ADD | EV_ENABLE, 0, 0, &sigterm_ctx);
+
+#if defined(PS5_PAYLOAD_SDK)
+  appdb_fd = open(DB_PATH, O_RDONLY);
+  if (appdb_fd == -1) {
+    log_printf("Error opening database file descriptor");
+    goto cleanup;
+  }
+
+  config_fd = open(CONFIG_PATH, O_RDONLY);
+  if (config_fd == -1) {
+    log_printf("Error opening config file descriptor");
+    goto cleanup;
+  }
+
+  appdb_ctx.id = appdb_fd;
+  config_ctx.id = config_fd;
+
+  // file-level edge-triggers
+  EV_SET(&change_list[nchanges++], appdb_fd, EVFILT_VNODE, EV_ADD | EV_ENABLE | EV_CLEAR, NOTE_WRITE, 0, &appdb_ctx);
+  EV_SET(&change_list[nchanges++], config_fd, EVFILT_VNODE, EV_ADD | EV_ENABLE | EV_CLEAR, NOTE_WRITE, 0, &config_ctx);
+#else
+  // timer poll to bypass libkqueue vnode quirks
+  EV_SET(&change_list[nchanges++], 1, EVFILT_TIMER, EV_ADD | EV_ENABLE, 0, TIMER_POLL_MS, &timer_ctx);
+#endif
+
+  if (kevent(kq, change_list, nchanges, NULL, 0, NULL) == -1) {
+    log_printf("Error registering kqueue event");
+    rc = 1;
+    goto cleanup;
+  }
+  nchanges = 0;
+
+  signal(SIGINT, on_signal);
+  signal(SIGTERM, on_signal);
+
+  log_printf("Listening for term signal and file events...");
+  while (1) {
+    int new_events;
+
+    do {
+      new_events = kevent(kq, change_list, nchanges, event_list, MAX_KQUEUE_EVENTS, NULL);
+    } while (new_events == -1 && errno == EINTR); // Retry if interrupted
+
+    if (new_events == -1) {
+      log_printf("kevent loop error: %s (errno: %d)", strerror(errno), errno);
+      rc = 1;
+      goto cleanup;
+    }
+
+    nchanges = 0;
+
+    // loop and process events
+    for (int i = 0; i < new_events; i++) {
+      struct kevent event = event_list[i];
+      EventContext *ctx = (EventContext *)event.udata;
+
+      // log_printf("EVENT: %d:%d:%p %p:%p:%d", event.filter, event.flags, event.udata, ctx,
+      //            ctx ? ctx->handle_event : NULL, ctx ? ctx->filter : 0);
+      if (ctx && ctx->handle_event && ((!ctx->filter) || (ctx->filter && ctx->filter == event.filter))) {
+        // if a handler needs to queue up a modification, it can do that
+        // via &change_list[(*nchanges)++]
+        int err = ctx->handle_event(kq, ctx, &event, change_list, &nchanges);
+        if (err) {
+          rc = (err > 0) ? err : 0;
+          goto cleanup;
+        }
+      }
+    }
+  }
+
+cleanup:
+  if (kq == -1)
+    close(kq);
+  if (config_fd == -1)
+    close(config_fd);
+  if (appdb_fd == -1)
+    close(appdb_fd);
+  return rc;
+}
+
+int main(int argc, char *argv[]) {
+  int rc = 0;
+
+  rename_service_thread(ELF_NAME);
+  init_config();
+  log_enable(config.general.debug);
+  notify_enable(!config.general.quiet);
+
+  notify("Locking ShellUI configuration...");
+  notify("Running in '%s' mode", config.general.oneshot ? "set and forget" : "daemon");
+
+  if (!config.general.oneshot && terminate_instances(ELF_NAME) != 0) {
+    log_printf("Failed to terminate old instances!");
+    rc = 1;
+    goto cleanup;
+  }
+
+  // get the initial user profile ids
+  // TODO: add update of user ids IF they change (should do this when we detect app.db change)
+  if (populate_user_ids(&num_uids, uids) != 0) {
+    log_printf("Failed to get the user profiles!");
+    rc = 1;
+    goto cleanup;
+  }
+
+  // Enforce initial configuration state on bootup
+  if (validate_and_apply_override()) {
+    log_printf("Failed to apply override!");
+    rc = 1;
+    goto cleanup;
+  }
+
+  if (!config.general.oneshot) {
+    log_printf("[Listening] Actively monitoring for updates to %s and SIGTERM...", DB_PATH);
+    rc = monitor_events();
+    if (rc) {
+      log_printf("Error in monitor_events: %d!", rc);
+    }
+  }
+
+  notify("Unlocking ShellUI configuration...");
+
+cleanup:
+  free_config(&config);
+  sleep(1);
+  return rc;
 }

@@ -1,0 +1,5 @@
+{
+  "C_Cpp.clang_format_style": "file",
+  "editor.wordWrapColumn": 120,
+  "editor.formatOnSave": true
+}

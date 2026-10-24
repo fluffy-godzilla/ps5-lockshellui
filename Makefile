@@ -22,12 +22,14 @@ LIBS     := $(KQUEUE_BUILD_DIR)/libkqueue.a  -lpthread
 
 # Source Files
 SRCS := src/main.c \
-				src/util_linux.c \
+				src/appdb.c \
+				src/config.c \
+				src/linux_util.c \
 			  $(EXT_DIR)/sqlite3.c
 OBJS := $(SRCS:.c=.o)
-ELF  := ps5-shellui-lock
+ELF  := lockshellui
 
-TEST_SRCS := src/test_linux.c \
+TEST_SRCS := src/linux_test.c \
 					   $(EXT_DIR)/sqlite3.c
 TEST_OBJS := $(TEST_SRCS:.c=.o)
 TEST  		:= test

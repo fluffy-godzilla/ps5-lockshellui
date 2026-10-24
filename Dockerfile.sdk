@@ -9,7 +9,8 @@ RUN apt-get update && apt-get install -y \
     llvm-18-dev \
     wget \
     unzip \
-    make
+    make \
+    socat
 
 # set up ps5-payload-sdk
 WORKDIR /opt

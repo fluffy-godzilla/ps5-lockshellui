@@ -3,7 +3,7 @@
 # as an argument (e.g. ./build.sh 1.2.3)
 VERSION=${1:-"1.0.0"}  # Default version if not set in environment
 
-ELFNAME="ps5-shellui-lock"
+ELFNAME="lockshellui"
 INPUT_ELF="${ELFNAME}.elf"
 OUTPUT_ELF="${ELFNAME}_v${VERSION}.elf"
 IMAGE_NAME="ps5-payload-sdk-${ELFNAME}"
