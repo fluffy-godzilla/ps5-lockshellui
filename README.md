@@ -11,15 +11,15 @@ Here's the list of well known applications and payloads you can use in your conf
 | FMGR88888	 | Web File Manager        |
 
 
-| App Id     | App Name                |
-|------------|-------------------------|
+| App Id     | App Name                | Notes
+|------------|-------------------------|--------------------
 | NPXS40037	 | PlayStation Plus        |
 | NPXS40047	 | PlayStation Store       |
 | NPXS40053	 | Discover                |
 | NPXS40054	 | Music Home              |
 | NPXS40056	 | All Apps                |
 | NPXS40063	 | Welcome                 |
-| NPXS40071	 | Game Library            |
+| NPXS40071	 | Game Library            | Can not be hidden
 | NPXS40074	 | Remote Play             |
 | NPXS40075	 | Media Gallery           |
 | NPXS40099	 | Share Player            |
