@@ -19,12 +19,12 @@ Here's the list of well known applications and payloads you can use in your conf
 | NPXS40054	 | Music Home              |
 | NPXS40056	 | All Apps                |
 | NPXS40063	 | Welcome                 |
-| NPXS40071	 | Game Library            | Can not be hidden
+| NPXS40071	 | Game Library            | Cannot be hidden
 | NPXS40074	 | Remote Play             |
 | NPXS40075	 | Media Gallery           |
 | NPXS40099	 | Share Player            |
 | NPXS40106	 | Game Streaming          |
-| NPXS40139	 | App Library             |
+| NPXS40139	 | App Library             | Cannot be hidden
 | NPXS40140	 | Disc Player             |
 | NPXS40144	 | Unsupported Disc        |
 | NPXS40145	 | Compilation             |
